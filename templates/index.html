@@ -137,7 +137,10 @@
       <div style="height:12px"></div>
       <h2>LAST SUBMITTED PROMPT</h2>
       <div id="lastPrompt" class="prompt-box">—</div>
-      <div class="footnote">The fly no longer sees just the raw picture. It sees a composite frame: a black top prompt bar plus the generated image below. While typing, the live prompt buffer is also pushed back into the retina proxy.</div>
+      <div style="height:12px"></div>
+      <h2>LANGUAGE REWARD</h2>
+      <div id="rewardBox" class="smallbox" style="font-family:ui-monospace, SFMono-Regular, Consolas, monospace; font-size:12px; line-height:1.55">loading...</div>
+      <div class="footnote">The fly no longer sees just the raw picture. It sees a composite frame: a black top prompt bar plus the generated image below. v9 also scores how many real or near-real English words appeared and feeds that reward back into a lightweight action policy.</div>
     </section>
 
     <section class="panel">
@@ -189,6 +192,7 @@ function escapeHtml(str) {
 function keyLabel(key) {
   if (key === 'space') return 'SPACE';
   if (key === 'back') return 'BACK';
+  if (key === 'delete') return 'DEL';
   return key;
 }
 
@@ -201,7 +205,7 @@ function renderKeyboard(layout, cursorRow, cursorCol) {
     rowEl.style.gridTemplateColumns = `repeat(${row.length}, minmax(0, 1fr))`;
     row.forEach((key, c) => {
       const keyEl = document.createElement('div');
-      const isSpecial = ['space', 'back', 'ENTER', 'OK'].includes(key);
+      const isSpecial = ['space', 'back', 'delete', 'ENTER', 'OK'].includes(key);
       keyEl.className = 'key' + (isSpecial ? ' special' : '') + (key === 'ENTER' ? ' enter' : '') + (r === cursorRow && c === cursorCol ? ' active' : '');
       keyEl.textContent = keyLabel(key);
       rowEl.appendChild(keyEl);
@@ -255,7 +259,7 @@ function renderHistory(records) {
       <div class="history-thumb">${record.image_url ? `<img src="${record.image_url}" alt="thumb">` : ''}</div>
       <div>
         <div class="history-prompt">${escapeHtml(record.prompt)}</div>
-        <div class="history-meta">${escapeHtml(record.timestamp)}<br>feedback: ${escapeHtml(record.local_path)}<br>raw: ${escapeHtml(record.raw_local_path || '')}</div>
+        <div class="history-meta">${escapeHtml(record.timestamp)}<br>${escapeHtml(record.reward_summary || '')}<br>feedback: ${escapeHtml(record.local_path)}<br>raw: ${escapeHtml(record.raw_local_path || '')}</div>
       </div>
     `;
     root.appendChild(item);
@@ -298,6 +302,25 @@ async function refresh() {
   document.getElementById('lastPrompt').textContent = data.last_prompt || '—';
   document.getElementById('logs').textContent = (data.logs || []).join('\n');
 
+  const rs = data.reward_status || {};
+  const br = rs.buffer_report || {};
+  const sr = rs.submit_report || {};
+  const policy = rs.policy || {};
+  const exactWords = (sr.exact_words || br.exact_words || []).slice(0, 8).join(', ') || '—';
+  const nearWords = (sr.near_words || br.near_words || []).slice(0, 4).map(x => `${x.token}->${x.target}`).join(', ') || '—';
+  const newExact = (br.new_exact_words || []).join(', ') || '—';
+  const newNear = (br.new_near_words || []).join(', ') || '—';
+  document.getElementById('rewardBox').textContent =
+    `prompts rewarded: ${rs.prompt_counter ?? 0}\n` +
+    `buffer score: ${Number(rs.current_buffer_score || 0).toFixed(2)} | last delta: ${Number(rs.last_delta || 0).toFixed(2)} | typing event: ${Number(rs.last_event_reward || 0).toFixed(2)}\n` +
+    `last submit reward: ${Number(rs.last_submit_reward || 0).toFixed(2)} | cumulative reward: ${Number(rs.total_reward || 0).toFixed(2)}\n` +
+    `new exact this typing step: ${newExact}\n` +
+    `new near this typing step: ${newNear}\n` +
+    `last exact words: ${(sr.exact_count ?? br.exact_count ?? 0)} -> ${exactWords}\n` +
+    `last near words: ${(sr.near_count ?? br.near_count ?? 0)} -> ${nearWords}\n` +
+    `prefix bonus: ${Number(br.prefix_bonus || 0).toFixed(2)} ${br.prefix_target ? `(${br.prefix_target})` : ''}\n` +
+    `policy: ${policy.policy_mode || '—'} | base ${policy.base_action || '—'} -> final ${policy.final_action || '—'}${policy.override ? ' [override]' : ''}`;
+
   const errorBox = document.getElementById('errorBox');
   if (data.last_error) {
     errorBox.style.display = 'block';
@@ -318,11 +341,12 @@ async function refresh() {
   const gr = bm.group_rates || {};
   const zs = bm.zscores || {};
   document.getElementById('decoderTelemetry').textContent =
-    `ACTION: ${bm.action || 'IDLE'}\n` +
+    `ACTION: ${bm.action || 'IDLE'} | base ${bm.base_action || bm.action || 'IDLE'} | policy ${bm.policy_action || bm.action || 'IDLE'}${bm.policy_override ? ' [override]' : ''}\n` +
     `why: ${bm.reason || '—'}\n` +
     `press source: ${bm.press_source || '—'} | MN9 spikes: ${bm.mn9_spikes ?? 0} | DNpe sync: ${bm.dnpe_sync ?? 0}\n` +
     `rates  L:${Number(gr.LEFT || 0).toFixed(1)} R:${Number(gr.RIGHT || 0).toFixed(1)} U:${Number(gr.UP || 0).toFixed(1)} D:${Number(gr.DOWN || 0).toFixed(1)}\n` +
-    `z      L:${Number(zs.LEFT || 0).toFixed(2)} R:${Number(zs.RIGHT || 0).toFixed(2)} U:${Number(zs.UP || 0).toFixed(2)} D:${Number(zs.DOWN || 0).toFixed(2)}`;
+    `z      L:${Number(zs.LEFT || 0).toFixed(2)} R:${Number(zs.RIGHT || 0).toFixed(2)} U:${Number(zs.UP || 0).toFixed(2)} D:${Number(zs.DOWN || 0).toFixed(2)}\n` +
+    `reward total: ${Number(bm.reward_total || 0).toFixed(2)} | buffer: ${Number(bm.buffer_reward || 0).toFixed(2)} | mode: ${bm.policy_mode || '—'}`;
 
   renderReadouts(bm.readouts || []);
   setBadge(document.getElementById('runBadge'), data.running ? 'ok' : 'stop', data.running ? 'loop running' : 'stopped');

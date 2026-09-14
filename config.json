@@ -20,7 +20,7 @@
   "semantic_keyboard": false,
   "max_prompt_tokens": 64,
   "max_history": 24,
-  "ui_title": "REAL DOOMFLY -> QWERTY -> SD1.5 LOOP v8",
+  "ui_title": "REAL DOOMFLY -> QWERTY -> SD1.5 LOOP v10",
   "doomfly_root": "C:/doomfly-main",
   "doomfly_graph": "C:/doomfly-main/outputs/doom/malecns_v1/graph.npz",
   "doomfly_manifest": "C:/doomfly-main/outputs/doom/malecns_v1/manifest.json",
@@ -35,5 +35,14 @@
   "bci_press_sync_history": 8,
   "keyboard_mode": "qwerty",
   "max_prompt_chars": 220,
-  "retina_header_ratio": 0.23
+  "retina_header_ratio": 0.23,
+  "reward_alpha": 0.18,
+  "reward_gamma": 0.94,
+  "reward_exploration": 0.16,
+  "reward_base_action_bias": 1.2,
+  "reward_learned_scale": 0.9,
+  "reward_typing_delta_gain": 1.0,
+  "reward_submit_gain": 1.25,
+  "reward_credit_window": 72,
+  "reward_max_abs_q": 8.0
 }

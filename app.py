@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import textwrap
 import threading
 import sys
@@ -62,6 +63,302 @@ QWERTY_LAYOUT = [
     ["space", "space", "-", "'", "[", "]", "ENTER", "ENTER", "delete", "delete"],
     ["space", "space", ",", ".", "?", "!", "ENTER", "ENTER", "delete", "delete"],
 ]
+
+ENGLISH_LEXICON_TEXT = """
+a i aah able about above abstract acid across actor actual add after again air alien alive all almost alone alpha already also am amber ancient angel animal another any apple arc area arm around art artist as ash at atlas atom autumn away azure baby back bad ball band bare base basic beach bear beat beautiful because become bed bee before begin behind being bell below best better between beyond big bird black blade blue blur body bone book born both bottle bottom branch bright broken bronze brother brush build building burn burst but by camera cat cave cell center central century chain chair chance change chaos city clay clean clear cliff clock cloth cloud coast cold color comet coming common copper coral core cosmic could craft crystal dark data dawn day dead deep deer delicate dense depth desert design detail dew did dim distant do dog door dream drift drop dry dusk each early earth east easy echo edge edit electric else ember empty end energy engine enough enter epic even evening ever every eye fabric face fade fair fall far fast feather field fire first fish flower fly fog forest form forward found fox frame free fresh friend frost future galaxy garden gate ghost girl glass glow gold good grace grain grass green grey grid ground grow hand happy hard has have he head heart heat heavy her hero high hill home honey horizon horse house how human ice idea image in insect inside iron island it jade jewel joy just keep key kind king knew lake land language large last late leaf left legend light line little live long look lost low machine magic make man many marble mark meadow memory metal micro mist moon more morning moss motion mountain move much music my narrow near nebula need never night no north not oak ocean of off old olive on once one open orange orchard other our out pale paper path peace pearl people petal phase picture pine pink place plain planet plant pool portrait power pretty prism pulse pure purple quartz queen quick quiet rain red reed river road rock root rose round ruin run safe said sand scale sea search secret seed seem shadow shape she shell shine short silver simple sky sleep slow small smoke snow soft solar song soul sound south space spark sphere spirit spring star steel stone storm story strange stream street string sun surreal swan sweet swift table take temple than that the their them then there these they thin thing this through thunder tiny to tower tree true turn under unknown up us valley velvet view violet vision void warm war water wave we wheat when where white who wild wind wing winter with woman wood word world would write yellow you young"""
+
+
+def tokenize_prompt_words(text: str) -> List[str]:
+    return [m.group(0).lower() for m in re.finditer(r"[a-zA-Z']+", text or "") if m.group(0)]
+
+
+def levenshtein_distance_limited(a: str, b: str, limit: int = 2) -> int:
+    if a == b:
+        return 0
+    if abs(len(a) - len(b)) > limit:
+        return limit + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        cur = [i]
+        row_min = cur[0]
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost))
+            row_min = min(row_min, cur[-1])
+        if row_min > limit:
+            return limit + 1
+        prev = cur
+    return prev[-1]
+
+
+class EnglishWordRewardDetector:
+    def __init__(self):
+        self.words = sorted({w.strip().lower() for w in ENGLISH_LEXICON_TEXT.split() if w.strip()})
+        self.word_set = set(self.words)
+        self.by_first: Dict[str, List[str]] = {}
+        for w in self.words:
+            self.by_first.setdefault(w[0], []).append(w)
+
+    def _looks_like_english(self, token: str) -> bool:
+        vowels = sum(1 for ch in token if ch in 'aeiouy')
+        consonants = sum(1 for ch in token if ch.isalpha() and ch not in 'aeiouy')
+        if vowels == 0:
+            return False
+        if len(token) >= 5 and consonants >= 5 and vowels <= 1:
+            return False
+        if 'qq' in token or 'zx' in token or 'qj' in token or 'jj' in token:
+            return False
+        if 'q' in token and 'qu' not in token:
+            return False
+        return True
+
+    def _prefix_score(self, token: str) -> tuple[float, str]:
+        if len(token) < 2 or token in self.word_set:
+            return 0.0, ''
+        candidates = [w for w in self.by_first.get(token[0], []) if w.startswith(token) and len(w) > len(token)]
+        if not candidates:
+            return 0.0, ''
+        best = min(candidates, key=len)
+        score = min(0.55, 0.14 * len(token))
+        return round(score, 3), best
+
+    def _near_match(self, token: str) -> tuple[float, str, int]:
+        if len(token) < 3:
+            return 0.0, '', 99
+        candidates = [w for w in self.by_first.get(token[0], []) if abs(len(w) - len(token)) <= 2]
+        best_word = ''
+        best_dist = 99
+        for cand in candidates:
+            dist = levenshtein_distance_limited(token, cand, limit=2)
+            if dist < best_dist:
+                best_dist = dist
+                best_word = cand
+                if dist == 1:
+                    break
+        if best_dist == 1:
+            return 0.72, best_word, best_dist
+        if best_dist == 2 and len(token) >= 5:
+            return 0.38, best_word, best_dist
+        return 0.0, '', best_dist
+
+    def analyze(self, text: str) -> Dict[str, Any]:
+        tokens = tokenize_prompt_words(text)
+        exact = []
+        near = []
+        unknown = []
+        prefix_bonus = 0.0
+        prefix_target = ''
+        for token in tokens:
+            if token in self.word_set:
+                exact.append(token)
+                continue
+            near_score, near_word, near_dist = self._near_match(token)
+            if near_score > 0:
+                near.append({'token': token, 'target': near_word, 'score': near_score, 'distance': near_dist})
+                continue
+            unknown.append(token)
+
+        if tokens:
+            prefix_bonus, prefix_target = self._prefix_score(tokens[-1])
+
+        exact_count = len(exact)
+        near_score_total = round(sum(item['score'] for item in near), 3)
+        unknown_penalty = min(1.6, 0.08 * max(0, len(unknown) - 1))
+        multiword_bonus = max(0, exact_count - 1) * 0.45
+        unique_bonus = min(0.6, 0.12 * len(set(exact)))
+        total_reward = max(0.0, exact_count * 1.0 + near_score_total + prefix_bonus + multiword_bonus + unique_bonus - unknown_penalty)
+        typing_reward = max(0.0, exact_count * 0.9 + near_score_total * 0.75 + prefix_bonus - min(1.0, 0.05 * len(unknown)))
+        english_ratio = (exact_count + 0.6 * len(near)) / max(1, len(tokens))
+        return {
+            'tokens': tokens,
+            'exact_words': exact,
+            'exact_count': exact_count,
+            'near_words': near,
+            'near_count': len(near),
+            'unknown_words': unknown,
+            'unknown_count': len(unknown),
+            'prefix_bonus': round(prefix_bonus, 3),
+            'prefix_target': prefix_target,
+            'typing_reward': round(typing_reward, 3),
+            'total_reward': round(total_reward, 3),
+            'english_ratio': round(float(english_ratio), 3),
+        }
+
+
+class RewardPolicy:
+    def __init__(self, config: Dict[str, Any]):
+        self.alpha = float(config.get('reward_alpha', 0.18))
+        self.gamma = float(config.get('reward_gamma', 0.94))
+        self.epsilon = float(config.get('reward_exploration', 0.16))
+        self.base_action_bias = float(config.get('reward_base_action_bias', 1.2))
+        self.learned_scale = float(config.get('reward_learned_scale', 0.9))
+        self.typing_delta_gain = float(config.get('reward_typing_delta_gain', 1.0))
+        self.submit_gain = float(config.get('reward_submit_gain', 1.25))
+        self.credit_window = int(config.get('reward_credit_window', 72))
+        self.max_abs_q = float(config.get('reward_max_abs_q', 8.0))
+        self.q_values: Dict[str, np.ndarray] = {}
+        self.trace: List[Dict[str, Any]] = []
+        self.current_buffer_score = 0.0
+        self.total_reward = 0.0
+        self.last_delta = 0.0
+        self.last_event_reward = 0.0
+        self.last_submit_reward = 0.0
+        self.last_buffer_report: Dict[str, Any] = {}
+        self.last_submit_report: Dict[str, Any] = {}
+        self.last_policy_info: Dict[str, Any] = {}
+        self.prompt_counter = 0
+        self.rewarded_exact_signatures: set[tuple[int, str]] = set()
+        self.rewarded_near_signatures: set[tuple[int, str]] = set()
+
+    def reset(self) -> None:
+        self.q_values.clear()
+        self.trace.clear()
+        self.current_buffer_score = 0.0
+        self.total_reward = 0.0
+        self.last_delta = 0.0
+        self.last_event_reward = 0.0
+        self.last_submit_reward = 0.0
+        self.last_buffer_report = {}
+        self.last_submit_report = {}
+        self.last_policy_info = {}
+        self.prompt_counter = 0
+        self.rewarded_exact_signatures.clear()
+        self.rewarded_near_signatures.clear()
+
+    def _state_key(self, cursor_row: int, cursor_col: int, layout: List[List[str]], prompt_text: str) -> str:
+        token = layout[cursor_row][cursor_col]
+        words = tokenize_prompt_words(prompt_text)
+        suffix = words[-1][-2:] if words else ''
+        length_bucket = min(12, len(prompt_text) // 3)
+        return f'{cursor_row}:{cursor_col}|{token}|{suffix}|{length_bucket}'
+
+    def _ensure_q(self, state_key: str) -> np.ndarray:
+        if state_key not in self.q_values:
+            self.q_values[state_key] = np.zeros(len(ACTIONS), dtype=np.float64)
+        return self.q_values[state_key]
+
+    def select_action(self, base_action: str, cursor_row: int, cursor_col: int, layout: List[List[str]], prompt_text: str) -> str:
+        state_key = self._state_key(cursor_row, cursor_col, layout, prompt_text)
+        q = self._ensure_q(state_key)
+        scores = q * self.learned_scale
+        if base_action in ACTIONS:
+            scores[ACTIONS.index(base_action)] += self.base_action_bias
+        if random.random() < self.epsilon:
+            final_action = random.choice(ACTIONS)
+            policy_mode = 'explore'
+        else:
+            final_action = ACTIONS[int(np.argmax(scores))]
+            policy_mode = 'greedy'
+        self.trace.append({'state_key': state_key, 'action': final_action})
+        if len(self.trace) > self.credit_window * 3:
+            self.trace = self.trace[-self.credit_window * 3:]
+        self.last_policy_info = {
+            'base_action': base_action,
+            'final_action': final_action,
+            'policy_mode': policy_mode,
+            'override': final_action != base_action,
+            'state_key': state_key,
+            'q_values': {a: round(float(q[i]), 3) for i, a in enumerate(ACTIONS)},
+        }
+        return final_action
+
+    def _apply_credit(self, reward: float) -> None:
+        if abs(reward) < 1e-6 or not self.trace:
+            return
+        recent = self.trace[-self.credit_window:]
+        for distance, item in enumerate(reversed(recent)):
+            decay = self.gamma ** distance
+            q = self._ensure_q(item['state_key'])
+            idx = ACTIONS.index(item['action'])
+            q[idx] = float(np.clip(q[idx] + self.alpha * reward * decay, -self.max_abs_q, self.max_abs_q))
+        self.total_reward += reward
+
+    def _word_signatures(self, report: Dict[str, Any]) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+        exact_sigs: list[tuple[int, str]] = []
+        for idx, token in enumerate(report.get('tokens', [])):
+            if token in report.get('exact_words', []):
+                exact_sigs.append((idx, token))
+        near_sigs: list[tuple[int, str]] = []
+        for item in report.get('near_words', []):
+            token = item.get('token', '')
+            for idx, t in enumerate(report.get('tokens', [])):
+                if t == token:
+                    near_sigs.append((idx, token))
+                    break
+        return exact_sigs, near_sigs
+
+    def _one_shot_typing_bonus(self, report: Dict[str, Any]) -> tuple[float, list[str], list[str]]:
+        exact_sigs, near_sigs = self._word_signatures(report)
+        current_exact = set(exact_sigs)
+        current_near = set(near_sigs)
+        # drop signatures that disappeared after delete/backtracking, so re-discovery is possible later in same prompt
+        self.rewarded_exact_signatures.intersection_update(current_exact)
+        self.rewarded_near_signatures.intersection_update(current_near)
+
+        new_exact = [sig for sig in exact_sigs if sig not in self.rewarded_exact_signatures]
+        new_near = [sig for sig in near_sigs if sig not in self.rewarded_near_signatures]
+
+        for sig in new_exact:
+            self.rewarded_exact_signatures.add(sig)
+        for sig in new_near:
+            self.rewarded_near_signatures.add(sig)
+
+        exact_words = [word for _, word in new_exact]
+        near_words = [word for _, word in new_near]
+        bonus = 0.22 * len(new_exact) + 0.08 * len(new_near)
+        return round(bonus, 3), exact_words, near_words
+
+    def on_buffer_updated(self, prompt_text: str, detector: 'EnglishWordRewardDetector') -> Dict[str, Any]:
+        report = detector.analyze(prompt_text)
+        delta = report['typing_reward'] - self.current_buffer_score
+        one_shot_bonus, new_exact_words, new_near_words = self._one_shot_typing_bonus(report)
+        event_reward = delta * self.typing_delta_gain + one_shot_bonus
+        self.last_delta = round(delta, 3)
+        self.last_event_reward = round(event_reward, 3)
+        self.current_buffer_score = report['typing_reward']
+        self.last_buffer_report = dict(report)
+        self.last_buffer_report['delta'] = round(delta, 3)
+        self.last_buffer_report['event_reward'] = round(event_reward, 3)
+        self.last_buffer_report['new_exact_words'] = new_exact_words
+        self.last_buffer_report['new_near_words'] = new_near_words
+        self.last_buffer_report['one_shot_bonus'] = round(one_shot_bonus, 3)
+        if abs(event_reward) >= 0.01:
+            self._apply_credit(event_reward)
+        return self.last_buffer_report
+
+    def on_prompt_submitted(self, prompt_text: str, detector: 'EnglishWordRewardDetector') -> Dict[str, Any]:
+        report = detector.analyze(prompt_text)
+        exact_count = report.get('exact_count', 0)
+        near_count = report.get('near_count', 0)
+        length_bonus = min(1.5, 0.15 * max(0, len(report.get('tokens', [])) - 1))
+        reward = (report['total_reward'] + exact_count * 0.9 + near_count * 0.25 + length_bonus) * self.submit_gain
+        self._apply_credit(reward)
+        self.last_submit_reward = round(reward, 3)
+        self.last_submit_report = dict(report)
+        self.last_submit_report['applied_reward'] = round(reward, 3)
+        self.last_submit_report['length_bonus'] = round(length_bonus, 3)
+        self.prompt_counter += 1
+        self.trace.clear()
+        self.current_buffer_score = 0.0
+        self.last_delta = 0.0
+        self.last_event_reward = 0.0
+        self.rewarded_exact_signatures.clear()
+        self.rewarded_near_signatures.clear()
+        return self.last_submit_report
+
+    def telemetry(self) -> Dict[str, Any]:
+        return {
+            'prompt_counter': self.prompt_counter,
+            'current_buffer_score': round(self.current_buffer_score, 3),
+            'last_delta': round(self.last_delta, 3),
+            'last_event_reward': round(self.last_event_reward, 3),
+            'last_submit_reward': round(self.last_submit_reward, 3),
+            'total_reward': round(self.total_reward, 3),
+            'buffer_report': self.last_buffer_report,
+            'submit_report': self.last_submit_report,
+            'policy': self.last_policy_info,
+        }
+
 
 
 def retinal_samples_rgb(rgb: np.ndarray, uv: np.ndarray) -> np.ndarray:
@@ -469,6 +766,8 @@ class OutputRecord:
     local_path: str
     raw_local_path: str
     timestamp: str
+    reward_total: float = 0.0
+    reward_summary: str = ''
 
 
 @dataclass
@@ -491,6 +790,7 @@ class LoopState:
     loop_task: Optional[asyncio.Task] = None
     brain_busy: bool = False
     display_revision: int = 0
+    reward_status: Dict[str, Any] = field(default_factory=dict)
 
     def current_prompt_text(self) -> str:
         if self.config.get("keyboard_mode", "qwerty") == "semantic":
@@ -524,6 +824,9 @@ layout_mode = str(CONFIG.get("keyboard_mode", "qwerty")).lower().strip()
 layout = SEMANTIC_LAYOUT if layout_mode == "semantic" else QWERTY_LAYOUT
 brain = DoomFlyBrainAdapter(CONFIG)
 state = LoopState(config=CONFIG, layout=layout, brain=brain)
+reward_detector = EnglishWordRewardDetector()
+reward_policy = RewardPolicy(CONFIG)
+state.reward_status = reward_policy.telemetry()
 generator = ComfyClient(CONFIG) if CONFIG.get("generation_backend") == "comfyui" else MockGenerator(CONFIG)
 
 
@@ -644,18 +947,45 @@ def snapshot_feedback_image(prompt_text: str, raw_image_path: str) -> Path:
     return snapshot_path
 
 
+def update_language_reward(log_prefix: str = '') -> Dict[str, Any]:
+    report = reward_policy.on_buffer_updated(state.current_prompt_text(), reward_detector)
+    state.reward_status = reward_policy.telemetry()
+    if log_prefix and abs(report.get('delta', 0.0)) >= 0.05:
+        state.push_log(
+            f"{log_prefix} reward delta {report.get('delta', 0.0):+.2f} | event={report.get('event_reward', 0.0):+.2f} | "
+            f"new_exact={','.join(report.get('new_exact_words', [])) or '—'} | new_near={','.join(report.get('new_near_words', [])) or '—'} | prefix={report.get('prefix_bonus', 0.0):.2f}"
+        )
+    return report
+
+
+def apply_prompt_submit_reward(prompt_text: str) -> Dict[str, Any]:
+    report = reward_policy.on_prompt_submitted(prompt_text, reward_detector)
+    state.reward_status = reward_policy.telemetry()
+    near_preview = ', '.join(f"{x['token']}→{x['target']}" for x in report.get('near_words', [])[:3]) or '—'
+    exact_preview = ', '.join(report.get('exact_words', [])[:5]) or '—'
+    state.push_log(
+        f"LANGUAGE REWARD -> total={report.get('total_reward', 0.0):.2f} applied={report.get('applied_reward', 0.0):.2f} | "
+        f"exact={report.get('exact_count', 0)} [{exact_preview}] | near={report.get('near_count', 0)} [{near_preview}]"
+    )
+    return report
+
+
 def apply_press_token(state: LoopState, token: str) -> Optional[str]:
     if token == "delete":
         if state.current_tokens:
             removed = state.current_tokens.pop()
             state.push_log(f"DELETE -> removed '{removed}'")
             refresh_retina_feedback()
+            update_language_reward('DELETE')
         return None
     if token in {"ENTER", "OK"}:
         prompt_text = state.current_prompt_text().strip()
         if prompt_text:
+            reward_report = apply_prompt_submit_reward(prompt_text)
             state.push_log(f"PROMPT SUBMIT -> {prompt_text}")
             state.current_tokens.clear()
+            state.reward_status = reward_policy.telemetry()
+            state.reward_status['last_submit_report'] = reward_report
             return prompt_text
         state.push_log("ENTER ignored: prompt empty")
         return None
@@ -667,6 +997,7 @@ def apply_press_token(state: LoopState, token: str) -> Optional[str]:
         state.current_tokens.append("space")
         state.push_log("TYPE -> [space]")
         refresh_retina_feedback()
+        update_language_reward('TYPE')
         return None
 
     if state.config.get("keyboard_mode", "qwerty") == "semantic":
@@ -684,6 +1015,7 @@ def apply_press_token(state: LoopState, token: str) -> Optional[str]:
         state.current_tokens.append(token)
         state.push_log(f"TYPE -> {token}")
     refresh_retina_feedback()
+    update_language_reward('TYPE')
     return None
 
 
@@ -693,12 +1025,16 @@ def generation_worker(prompt_text: str) -> None:
         state.last_prompt = prompt_text
         state.last_raw_image_local_path = str(raw_path)
         snapshot_path = snapshot_feedback_image(prompt_text, str(raw_path))
+        submit_report = reward_policy.last_submit_report or reward_detector.analyze(prompt_text)
+        reward_summary = f"exact {submit_report.get('exact_count', 0)} | near {submit_report.get('near_count', 0)} | reward {submit_report.get('total_reward', 0.0):.2f}"
         state.records.insert(0, OutputRecord(
             prompt=prompt_text,
             image_url=f"/static/generated/{snapshot_path.name}",
             local_path=str(snapshot_path),
             raw_local_path=str(raw_path),
             timestamp=now_ts(),
+            reward_total=float(submit_report.get('total_reward', 0.0)),
+            reward_summary=reward_summary,
         ))
         state.records = state.records[: int(CONFIG.get("max_history", 24))]
         refresh_retina_feedback(f"IMAGE READY + RETINA UPDATED -> raw={Path(raw_path).name} | feedback={snapshot_path.name}")
@@ -740,13 +1076,28 @@ def apply_brain_action(action: str) -> Optional[str]:
 async def one_brain_action() -> str:
     state.brain_busy = True
     try:
-        return await asyncio.to_thread(
+        base_action = await asyncio.to_thread(
             state.brain.choose_action,
             state.cursor_row,
             state.cursor_col,
             state.layout,
             len(state.current_prompt_text()),
         )
+        final_action = reward_policy.select_action(
+            base_action,
+            state.cursor_row,
+            state.cursor_col,
+            state.layout,
+            state.current_prompt_text(),
+        )
+        state.reward_status = reward_policy.telemetry()
+        state.brain.last_metrics['base_action'] = base_action
+        state.brain.last_metrics['policy_action'] = final_action
+        state.brain.last_metrics['policy_mode'] = reward_policy.last_policy_info.get('policy_mode', '—')
+        state.brain.last_metrics['policy_override'] = reward_policy.last_policy_info.get('override', False)
+        state.brain.last_metrics['reward_total'] = state.reward_status.get('total_reward', 0.0)
+        state.brain.last_metrics['buffer_reward'] = state.reward_status.get('current_buffer_score', 0.0)
+        return final_action
     finally:
         state.brain_busy = False
 
@@ -760,7 +1111,7 @@ async def fly_loop() -> None:
                 prompt_to_generate = apply_brain_action(action)
                 m = state.brain.last_metrics
                 state.push_log(
-                    f"NEURAL ACTION -> {action} @ ({state.cursor_row},{state.cursor_col}) | "
+                    f"NEURAL ACTION -> {action} (base {m.get('base_action', action)}) @ ({state.cursor_row},{state.cursor_col}) | "
                     f"reason={m.get('reason', '—')} | spikes={m.get('spikes', 0)} brain={m.get('wall_ms', 0)}ms"
                 )
                 if prompt_to_generate:
@@ -785,6 +1136,7 @@ async def startup_event():
     state.push_log(state.brain.summary())
     state.push_log(f"Keyboard mode: {CONFIG.get('keyboard_mode', 'qwerty')}")
     state.push_log("Retina feedback mode: prompt header + generated image")
+    state.push_log("Reward mode: English-word detector + lightweight policy reinforcement")
     if CONFIG.get("generation_backend") == "comfyui":
         state.push_log(f"ComfyUI backend: {CONFIG.get('comfyui_url')} | checkpoint={CONFIG.get('checkpoint_name')}")
         try:
@@ -804,6 +1156,7 @@ async def index(request: Request):
         "request": request,
         "title": CONFIG.get("ui_title", "Fly SD15 Loop"),
         "keyboard_mode": CONFIG.get("keyboard_mode", "qwerty"),
+        "reward_status": state.reward_status,
     })
 
 
@@ -830,6 +1183,7 @@ async def api_state():
         "brain_summary": state.brain.summary(),
         "brain_metrics": state.brain.last_metrics,
         "keyboard_mode": CONFIG.get("keyboard_mode", "qwerty"),
+        "reward_status": state.reward_status,
     })
 
 
@@ -865,7 +1219,7 @@ async def api_step():
     prompt_to_generate = apply_brain_action(action)
     m = state.brain.last_metrics
     state.push_log(
-        f"MANUAL NEURAL STEP -> {action} | reason={m.get('reason', '—')} | spikes={m.get('spikes', 0)} brain={m.get('wall_ms', 0)}ms"
+        f"MANUAL NEURAL STEP -> {action} (base {m.get('base_action', action)}) | reason={m.get('reason', '—')} | spikes={m.get('spikes', 0)} brain={m.get('wall_ms', 0)}ms"
     )
     if prompt_to_generate:
         state.generating = True
@@ -908,6 +1262,8 @@ async def api_reset():
     state.logs.clear()
     state.last_error = ""
     state.display_revision = 0
+    reward_policy.reset()
+    state.reward_status = reward_policy.telemetry()
     await asyncio.to_thread(state.brain.reset)
     state.push_log("State reset: full DOOMFLY neural state recreated")
     await asyncio.to_thread(refresh_retina_feedback)
