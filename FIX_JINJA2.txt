@@ -1,0 +1,2 @@
+Fix v2: added Jinja2==3.1.6 to requirements and dependency self-check in run scripts.
+Existing install quick repair: .venv\Scripts\python.exe -m pip install Jinja2==3.1.6

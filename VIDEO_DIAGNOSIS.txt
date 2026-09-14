@@ -1,0 +1,1 @@
+v6 note: obsolete v3/v5 diagnostics removed. Current rule: no fixed 3-token submit; generation occurs only when neural PRESS hits ENTER.

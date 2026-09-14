@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+
+.idea/
+
+static/generated/*
+!static/generated/.gitkeep
+
+.DS_Store
+Thumbs.db

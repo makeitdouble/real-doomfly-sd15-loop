@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --panel: #15151c;
+      --panel2: #1b1c25;
+      --text: #e7e9ef;
+      --muted: #9ca0ac;
+      --accent: #7fffd4;
+      --danger: #ff6b6b;
+      --ok: #88f17c;
+      --border: #2f3442;
+      --key: #232838;
+      --key-active: #b9ffd8;
+      --key-active-text: #08110d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top, #1a1e2c 0%, var(--bg) 50%);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, Arial, sans-serif;
+    }
+    .wrap { width: min(1700px, 98vw); margin: 0 auto; padding: 18px; }
+    .topbar { display:flex; gap:12px; justify-content:space-between; align-items:center; margin-bottom:16px; }
+    .titlebox h1 { margin:0 0 4px; font-size:26px; letter-spacing:.04em; }
+    .subtitle { color:var(--muted); font-size:14px; }
+    .controls { display:flex; gap:8px; flex-wrap:wrap; }
+    button {
+      background: var(--panel2); color: var(--text); border:1px solid var(--border);
+      border-radius:10px; padding:10px 14px; cursor:pointer; font-weight:700;
+    }
+    button:hover { border-color: var(--accent); }
+    .status-row { display:grid; grid-template-columns: .9fr .9fr 1.1fr 1.6fr; gap:10px; margin-bottom:12px; }
+    .badge {
+      display:inline-flex; align-items:center; gap:8px; border-radius:999px; border:1px solid var(--border);
+      padding:7px 11px; font-size:13px; font-weight:700; color:var(--muted); background:rgba(255,255,255,.02);
+    }
+    .badge .dot { width:10px; height:10px; border-radius:50%; background:#777; }
+    .badge.ok .dot { background: var(--ok); }
+    .badge.warn .dot { background: #ffbf5f; }
+    .badge.stop .dot { background: var(--danger); }
+    .grid { display:grid; grid-template-columns: 1.1fr .95fr .85fr; gap:16px; align-items:start; }
+    .panel {
+      background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.01));
+      border:1px solid var(--border); border-radius:18px; padding:14px; box-shadow:0 20px 60px rgba(0,0,0,.28);
+    }
+    .panel h2 { margin:0 0 12px; font-size:16px; letter-spacing:.05em; color: var(--accent); }
+    .image-box {
+      aspect-ratio: 1/1; border-radius:14px; border:1px solid var(--border); overflow:hidden; background:#090b11;
+      display:flex; align-items:center; justify-content:center; position:relative;
+    }
+    .image-box img { width:100%; height:100%; object-fit:cover; display:block; }
+    .placeholder { color:var(--muted); text-align:center; padding:20px; line-height:1.5; font-size:14px; }
+    .overlay {
+      position:absolute; inset:auto 10px 10px 10px; background:rgba(0,0,0,.58); backdrop-filter:blur(4px);
+      border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:8px 10px; font-size:12px; color:#fff;
+    }
+    .prompt-box, .smallbox {
+      border:1px solid var(--border); background: var(--panel2); border-radius:12px; padding:12px;
+      min-height:72px; white-space:pre-wrap; word-wrap:break-word;
+    }
+    .kbd-grid { display:grid; gap:8px; }
+    .kbd-row { display:grid; gap:8px; }
+    .key {
+      min-height:58px; border:1px solid var(--border); border-radius:12px; background:var(--key); display:flex;
+      align-items:center; justify-content:center; text-align:center; padding:4px; font-size:20px; font-weight:700;
+      letter-spacing:.02em; transition: transform .12s ease, background .12s ease;
+    }
+    .key.special { font-size:16px; }
+    .key.enter { border-color: rgba(255,191,95,.55); color:#ffd28a; }
+    .key.active {
+      background: var(--key-active); color: var(--key-active-text); transform:translateY(-1px) scale(1.03);
+      box-shadow: 0 0 0 2px rgba(127,255,212,.24), 0 12px 30px rgba(127,255,212,.18);
+    }
+    .decoder-box {
+      border:1px solid var(--border); background:#0d1018; border-radius:12px; padding:10px 12px; margin-bottom:12px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size:12px; line-height:1.5; color:#dbe3ff; white-space:pre-wrap;
+    }
+    .readout-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:12px; max-height:330px; overflow:auto; }
+    .readout { border:1px solid var(--border); border-radius:9px; padding:7px 8px; background:rgba(255,255,255,.02); font-family:ui-monospace, SFMono-Regular, Consolas, monospace; font-size:11px; }
+    .readout.active { border-color: rgba(127,255,212,.55); }
+    .readout-head { display:flex; justify-content:space-between; gap:6px; font-weight:700; }
+    .readout-meta { color:var(--muted); margin-top:2px; }
+    .readout-bar { height:4px; background:#252a38; border-radius:99px; overflow:hidden; margin-top:5px; }
+    .readout-fill { height:100%; background:var(--accent); border-radius:99px; }
+    .log {
+      background:#0d1018; border:1px solid var(--border); border-radius:12px; padding:12px;
+      min-height:360px; max-height:360px; overflow:auto; font-family:ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size:12px; line-height:1.5; color:#dbe3ff;
+    }
+    .history { display:grid; gap:10px; max-height:540px; overflow:auto; }
+    .history-item { display:grid; grid-template-columns:110px 1fr; gap:10px; border:1px solid var(--border); border-radius:12px; padding:10px; background:rgba(255,255,255,.02); }
+    .history-thumb { width:110px; height:110px; border-radius:10px; overflow:hidden; border:1px solid var(--border); background:#090b11; }
+    .history-thumb img { width:100%; height:100%; object-fit:cover; }
+    .history-meta { font-size:13px; color: var(--muted); }
+    .history-prompt { color:var(--text); font-weight:600; margin-bottom:6px; word-break:break-word; }
+    .error { margin-top:10px; color:#ffd2d2; background:rgba(255,107,107,.12); border:1px solid rgba(255,107,107,.35); border-radius:12px; padding:10px 12px; font-size:13px; white-space:pre-wrap; }
+    .footnote { color:var(--muted); font-size:12px; margin-top:12px; line-height:1.55; }
+    @media (max-width: 1280px) { .grid { grid-template-columns:1fr; } .status-row { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div class="titlebox">
+      <h1>{{ title }}</h1>
+      <div class="subtitle">Closed loop: real fly connectome -> QWERTY keyboard -> SD1.5 / ComfyUI -> prompt+image feedback -> next typing</div>
+    </div>
+    <div class="controls">
+      <button onclick="postAction('/api/start')">START LOOP</button>
+      <button onclick="postAction('/api/stop')">STOP</button>
+      <button onclick="postAction('/api/step')">STEP</button>
+      <button onclick="postAction('/api/test-generation')">TEST IMAGE</button>
+      <button onclick="postAction('/api/reset')">RESET</button>
+    </div>
+  </div>
+
+  <div class="status-row">
+    <div id="runBadge" class="badge stop"><span class="dot"></span><span>stopped</span></div>
+    <div id="genBadge" class="badge stop"><span class="dot"></span><span>idle</span></div>
+    <div id="backendBadge" class="badge warn"><span class="dot"></span><span>backend</span></div>
+    <div id="brainBadge" class="badge ok"><span class="dot"></span><span>real brain</span></div>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>RETINA / LIVE FEEDBACK IMAGE</h2>
+      <div class="image-box" id="imageBox">
+        <div class="placeholder">No generated image yet.<br>Retina feedback image will appear here.</div>
+      </div>
+      <div style="height:12px"></div>
+      <h2>LAST SUBMITTED PROMPT</h2>
+      <div id="lastPrompt" class="prompt-box">—</div>
+      <div class="footnote">The fly no longer sees just the raw picture. It sees a composite frame: a black top prompt bar plus the generated image below. While typing, the live prompt buffer is also pushed back into the retina proxy.</div>
+    </section>
+
+    <section class="panel">
+      <h2>KEYBOARD</h2>
+      <div class="smallbox" style="margin-bottom:12px">
+        <div style="color:var(--muted); font-size:12px; margin-bottom:6px">CURRENT PROMPT BUFFER</div>
+        <div id="currentPrompt" style="font-size:18px; font-weight:700; line-height:1.45">—</div>
+      </div>
+      <div id="keyboard" class="kbd-grid"></div>
+      <div class="footnote">QWERTY mode: the fly can type free-form character strings, spaces, punctuation, backspace, and only submits when it reaches ENTER and PRESSes it.</div>
+    </section>
+
+    <section class="panel">
+      <h2>REAL CONNECTOME / BCI</h2>
+      <div id="brainTelemetry" class="smallbox" style="margin-bottom:12px; font-family:ui-monospace, SFMono-Regular, Consolas, monospace; font-size:12px; line-height:1.5">loading...</div>
+      <h2>DECODER</h2>
+      <div id="decoderTelemetry" class="decoder-box">loading...</div>
+      <h2>READOUT NEURONS</h2>
+      <div id="readoutGrid" class="readout-grid"></div>
+      <h2>EVENT LOG</h2>
+      <div id="logs" class="log"></div>
+      <div id="errorBox" class="error" style="display:none"></div>
+    </section>
+  </div>
+
+  <div style="height:16px"></div>
+  <section class="panel">
+    <h2>HISTORY</h2>
+    <div id="history" class="history"></div>
+  </section>
+</div>
+
+<script>
+async function postAction(url) {
+  const res = await fetch(url, { method: 'POST' });
+  if (!res.ok) {
+    const txt = await res.text();
+    alert(txt);
+  }
+  await refresh();
+}
+
+function escapeHtml(str) {
+  return (str || '').replace(/[&<>"']/g, function(m) {
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'})[m];
+  });
+}
+
+function keyLabel(key) {
+  if (key === 'space') return 'SPACE';
+  if (key === 'back') return 'BACK';
+  return key;
+}
+
+function renderKeyboard(layout, cursorRow, cursorCol) {
+  const root = document.getElementById('keyboard');
+  root.innerHTML = '';
+  layout.forEach((row, r) => {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'kbd-row';
+    rowEl.style.gridTemplateColumns = `repeat(${row.length}, minmax(0, 1fr))`;
+    row.forEach((key, c) => {
+      const keyEl = document.createElement('div');
+      const isSpecial = ['space', 'back', 'ENTER', 'OK'].includes(key);
+      keyEl.className = 'key' + (isSpecial ? ' special' : '') + (key === 'ENTER' ? ' enter' : '') + (r === cursorRow && c === cursorCol ? ' active' : '');
+      keyEl.textContent = keyLabel(key);
+      rowEl.appendChild(keyEl);
+    });
+    root.appendChild(rowEl);
+  });
+}
+
+function renderImage(url, prompt) {
+  const box = document.getElementById('imageBox');
+  if (!url) {
+    if (box.dataset.state !== 'empty') {
+      box.innerHTML = '<div class="placeholder">No generated image yet.<br>Retina feedback image will appear here.</div>';
+      box.dataset.state = 'empty';
+      box.dataset.url = '';
+    }
+    return;
+  }
+
+  let img = box.querySelector('img');
+  let overlay = box.querySelector('.overlay');
+  if (!img || box.dataset.url !== url) {
+    box.innerHTML = '';
+    img = document.createElement('img');
+    img.alt = 'retina feedback';
+    img.src = url;
+    overlay = document.createElement('div');
+    overlay.className = 'overlay';
+    box.appendChild(img);
+    box.appendChild(overlay);
+    box.dataset.url = url;
+    box.dataset.state = 'image';
+  }
+  overlay.textContent = prompt || '';
+}
+
+function renderHistory(records) {
+  const root = document.getElementById('history');
+  const serialized = JSON.stringify(records || []);
+  if (root.dataset.serialized === serialized) return;
+  root.dataset.serialized = serialized;
+  root.innerHTML = '';
+  if (!records || !records.length) {
+    root.innerHTML = '<div class="placeholder" style="border:1px solid var(--border); border-radius:12px;">History is empty.</div>';
+    return;
+  }
+  records.forEach(record => {
+    const item = document.createElement('div');
+    item.className = 'history-item';
+    item.innerHTML = `
+      <div class="history-thumb">${record.image_url ? `<img src="${record.image_url}" alt="thumb">` : ''}</div>
+      <div>
+        <div class="history-prompt">${escapeHtml(record.prompt)}</div>
+        <div class="history-meta">${escapeHtml(record.timestamp)}<br>feedback: ${escapeHtml(record.local_path)}<br>raw: ${escapeHtml(record.raw_local_path || '')}</div>
+      </div>
+    `;
+    root.appendChild(item);
+  });
+}
+
+function renderReadouts(rows) {
+  const root = document.getElementById('readoutGrid');
+  const list = rows || [];
+  const maxRate = Math.max(1, ...list.map(r => Number(r.rate_hz || 0)));
+  root.innerHTML = '';
+  list.forEach(r => {
+    const rate = Number(r.rate_hz || 0);
+    const spikes = Number(r.spikes || 0);
+    const el = document.createElement('div');
+    el.className = 'readout' + (spikes > 0 ? ' active' : '');
+    const pct = Math.max(0, Math.min(100, (rate / maxRate) * 100));
+    el.innerHTML = `
+      <div class="readout-head"><span>${escapeHtml(r.type || '?')} ${escapeHtml(r.side || '')}</span><span>${rate.toFixed(1)} Hz</span></div>
+      <div class="readout-meta">id ${escapeHtml(String(r.id || '—'))} · spikes ${spikes}</div>
+      <div class="readout-bar"><div class="readout-fill" style="width:${pct}%"></div></div>
+    `;
+    root.appendChild(el);
+  });
+}
+
+function setBadge(el, mode, text) {
+  el.className = 'badge ' + mode;
+  el.querySelector('span:last-child').textContent = text;
+}
+
+async function refresh() {
+  const res = await fetch('/api/state');
+  const data = await res.json();
+  renderKeyboard(data.layout, data.cursor_row, data.cursor_col);
+  renderImage(data.last_image_url, data.current_prompt || data.last_prompt);
+  renderHistory(data.records || []);
+
+  document.getElementById('currentPrompt').textContent = data.current_prompt || '—';
+  document.getElementById('lastPrompt').textContent = data.last_prompt || '—';
+  document.getElementById('logs').textContent = (data.logs || []).join('\n');
+
+  const errorBox = document.getElementById('errorBox');
+  if (data.last_error) {
+    errorBox.style.display = 'block';
+    errorBox.textContent = data.last_error;
+  } else {
+    errorBox.style.display = 'none';
+    errorBox.textContent = '';
+  }
+
+  const bm = data.brain_metrics || {};
+  document.getElementById('brainTelemetry').textContent =
+    `dataset: ${bm.dataset || '—'}\n` +
+    `neurons: ${(bm.neurons || 0).toLocaleString()} | edges: ${(bm.edges || 0).toLocaleString()} | retina: ${(bm.retina || 0).toLocaleString()}\n` +
+    `input: ${bm.image || '—'}\n` +
+    `spikes/step: ${(bm.spikes || 0).toLocaleString()} | active neurons: ${(bm.active_neurons || 0).toLocaleString()}\n` +
+    `neural time: ${bm.sim_ms ?? 0} ms | last wall: ${bm.wall_ms ?? 0} ms`;
+
+  const gr = bm.group_rates || {};
+  const zs = bm.zscores || {};
+  document.getElementById('decoderTelemetry').textContent =
+    `ACTION: ${bm.action || 'IDLE'}\n` +
+    `why: ${bm.reason || '—'}\n` +
+    `press source: ${bm.press_source || '—'} | MN9 spikes: ${bm.mn9_spikes ?? 0} | DNpe sync: ${bm.dnpe_sync ?? 0}\n` +
+    `rates  L:${Number(gr.LEFT || 0).toFixed(1)} R:${Number(gr.RIGHT || 0).toFixed(1)} U:${Number(gr.UP || 0).toFixed(1)} D:${Number(gr.DOWN || 0).toFixed(1)}\n` +
+    `z      L:${Number(zs.LEFT || 0).toFixed(2)} R:${Number(zs.RIGHT || 0).toFixed(2)} U:${Number(zs.UP || 0).toFixed(2)} D:${Number(zs.DOWN || 0).toFixed(2)}`;
+
+  renderReadouts(bm.readouts || []);
+  setBadge(document.getElementById('runBadge'), data.running ? 'ok' : 'stop', data.running ? 'loop running' : 'stopped');
+  setBadge(document.getElementById('genBadge'), data.brain_busy ? 'warn' : (data.generating ? 'warn' : 'stop'), data.brain_busy ? 'brain stepping...' : (data.generating ? 'generating image...' : 'idle'));
+  setBadge(document.getElementById('backendBadge'), 'warn', `${data.backend} | ${data.checkpoint} | tick ${data.tick_seconds}s`);
+  setBadge(document.getElementById('brainBadge'), 'ok', data.brain_summary || 'REAL DOOMFLY');
+}
+
+refresh();
+setInterval(refresh, 700);
+</script>
+</body>
+</html>

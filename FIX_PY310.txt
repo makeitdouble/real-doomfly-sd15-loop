@@ -1,0 +1,4 @@
+Fix for machines with Python 3.10 only:
+- installer now falls back 3.11 -> 3.10 -> python
+- numpy pinned to 2.2.6 (Python 3.10 compatible)
+- launchers abort cleanly if installation fails
