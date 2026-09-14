@@ -1,6 +1,6 @@
 # REAL DOOMFLY -> QWERTY -> SD1.5 LOOP v8
 
-Что поменял:
+![screen](screen.png)
 
 - заголовок обновлён на **v8**
 - QWERTY-клавиатура сохранена
